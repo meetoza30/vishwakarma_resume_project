@@ -2,6 +2,7 @@ import tempfile
 import os
 import shutil
 import json
+from datetime import datetime
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,7 +14,7 @@ from services.resume_processor import process_resume_file
 from services.resume_extraction import extract_text_preserving_layout
 from services.jdExtracter import extract_jd_with_llm
 from services.matcher import match_resume_to_jd
-from services.report_export import write_tabular_report
+from services.report_export import write_tabular_report, write_excel_report
 from utils.generatepdf import generate_resume_pdf
 from utils.generatereport import generate_match_report_pdf
 from middleware.rate_limiter import check_rate_limit, increment_active, decrement_active
@@ -257,10 +258,13 @@ async def match_bulk_resumes(
 
         report_download_url = None
         csv_download_url = None
+        excel_download_url = None
         report_filename = "match_report.pdf"
         csv_filename = "faculty_screening_report.csv"
+        excel_filename = "faculty_screening_report.xlsx"
         report_path = os.path.join(STATIC_DIR, report_filename)
         csv_path = os.path.join(STATIC_DIR, csv_filename)
+        excel_path = os.path.join(STATIC_DIR, excel_filename)
 
         try:
             generate_match_report_pdf(
@@ -281,11 +285,19 @@ async def match_bulk_resumes(
         except Exception as csv_e:
             print(f"CSV report generation failed: {csv_e}")
 
+        try:
+            write_excel_report(excel_path, frontend_results)
+            excel_download_url = "/download-excel-report"
+            print(f"Excel report saved: {excel_path}")
+        except Exception as excel_e:
+            print(f"Excel report generation failed: {excel_e}")
+
         response_data = {
             "success": True,
             "results": frontend_results,
             "report_download_url": report_download_url,
             "csv_download_url": csv_download_url,
+            "excel_download_url": excel_download_url,
         }
         return JSONResponse(content=response_data)
 
@@ -308,11 +320,12 @@ async def download_match_report():
             status_code=404,
             detail="No match report found. Run /match-bulk first to generate one."
         )
+    date_str = datetime.now().strftime("%d_%m_%y")
     return FileResponse(
         path=report_path,
-        filename="match_report.pdf",
+        filename=f"match_report_{date_str}.pdf",
         media_type="application/pdf",
-        headers={"Content-Disposition": 'attachment; filename="match_report.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="match_report_{date_str}.pdf"'},
     )
 
 @router.get("/download-csv-report")
@@ -326,11 +339,30 @@ async def download_csv_report():
             status_code=404,
             detail="No CSV match report found. Run /match-bulk first to generate one."
         )
+    date_str = datetime.now().strftime("%d_%m_%y")
     return FileResponse(
         path=csv_path,
-        filename="faculty_screening_report.csv",
+        filename=f"faculty_screening_report_{date_str}.csv",
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="faculty_screening_report.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="faculty_screening_report_{date_str}.csv"'},
+    )
+
+
+@router.get("/download-excel-report")
+async def download_excel_report():
+    """Download the formatted Excel candidate information sheet."""
+    excel_path = os.path.join(STATIC_DIR, "faculty_screening_report.xlsx")
+    if not os.path.exists(excel_path):
+        raise HTTPException(
+            status_code=404,
+            detail="No Excel match report found. Run /match-bulk first to generate one.",
+        )
+    date_str = datetime.now().strftime("%d_%m_%y")
+    return FileResponse(
+        path=excel_path,
+        filename=f"faculty_screening_report_{date_str}.xlsx",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="faculty_screening_report_{date_str}.xlsx"'},
     )
 
 @router.post("/extract-jd")

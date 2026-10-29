@@ -72,7 +72,7 @@ class PillarScore(BaseModel):
 
 class SevenPillarBreakdown(BaseModel):
     research_publications: PillarScore = Field(default_factory=PillarScore)
-    experience_domain_alignment: PillarScore = Field(default_factory=PillarScore)
+    experience_position_norms: PillarScore = Field(default_factory=PillarScore)
     patents_grants: PillarScore = Field(default_factory=PillarScore)
     leadership_roles: PillarScore = Field(default_factory=PillarScore)
     professional_dev: PillarScore = Field(default_factory=PillarScore)

@@ -120,7 +120,7 @@ function JDResultsPage({ matchData, onReset }) {
     return null;
   }
 
-  const { results = [], report_download_url, csv_download_url } = matchData;
+  const { results = [], report_download_url, excel_download_url } = matchData;
 
   const mappedResults = results.map((r, i) => ({
     ...r,
@@ -136,8 +136,8 @@ function JDResultsPage({ matchData, onReset }) {
     window.open(url, '_blank');
   };
 
-  const handleDownloadCsv = () => {
-    const url = csv_download_url ? (csv_download_url.startsWith('http') ? csv_download_url : `${API_BASE}${csv_download_url}`) : `${API_BASE}/download-csv-report`;
+  const handleDownloadExcel = () => {
+    const url = excel_download_url ? (excel_download_url.startsWith('http') ? excel_download_url : `${API_BASE}${excel_download_url}`) : `${API_BASE}/download-excel-report`;
     window.open(url, '_blank');
   };
 
@@ -176,14 +176,14 @@ function JDResultsPage({ matchData, onReset }) {
         </div>
 
         <div className="jdr-topbar-actions">
-          <button className="primary-btn jdr-download-csv-btn" onClick={handleDownloadCsv}>
+          <button className="primary-btn jdr-download-csv-btn" onClick={handleDownloadExcel}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
               <line x1="16" y1="13" x2="8" y2="13" />
               <line x1="16" y1="17" x2="8" y2="17" />
             </svg>
-            Download CSV
+            Download Excel
           </button>
           
           <button className="outline-btn jdr-download-pdf-btn" onClick={handleDownloadReport}>

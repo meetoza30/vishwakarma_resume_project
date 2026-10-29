@@ -15,6 +15,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from datetime import datetime
+from services.report_export import sort_results_by_score
 
 # ---------------------------------------------------------------------------
 # Brand constants (Vishwakarma Group Theme)
@@ -89,6 +90,16 @@ small_gray = ParagraphStyle(
     fontSize=9,
     textColor=colors.HexColor("#666666"),
     leading=13,
+)
+
+official_remarks_style = ParagraphStyle(
+    "official_remarks",
+    fontSize=12,
+    textColor=BRAND_BLUE,
+    fontName="Helvetica-Bold",
+    leading=16,
+    spaceBefore=3,
+    spaceAfter=4,
 )
 
 
@@ -166,8 +177,10 @@ def _cover_section(jd_data: dict, total_candidates: int) -> list:
     exp_req     = jd_data.get("experience_required_years", 0)
     edu_req     = jd_data.get("education_required", "N/A")
     req_skills  = ", ".join(jd_data.get("required_skills", [])[:8]) or "—"
+    eligibility_role = jd_data.get("position") or "Not Mentioned"
 
     jd_rows = [
+        [Paragraph("AICTE Eligibility Role", label_style), Paragraph(eligibility_role, body_style)],
         [Paragraph("Job Title", label_style),         Paragraph(jd_title, body_style)],
         [Paragraph("Company", label_style),            Paragraph(company or "—", body_style)],
         [Paragraph("Domain", label_style),             Paragraph(domain or "—", body_style)],
@@ -212,6 +225,12 @@ def _candidate_section(rank: int, result: dict) -> list:
     grade           = match.get("grade", "N/A")
     summary         = match.get("summary", "")
     breakdown       = match.get("breakdown", {})
+    aicte_eligibility = match.get("aicte_eligibility", {})
+    eligibility_role = (
+        aicte_eligibility.get("primary_recommended_status", "Not Mentioned")
+        if isinstance(aicte_eligibility, dict)
+        else "Not Mentioned"
+    )
     candidate_name  = match.get("candidate_name") or result.get("filename", f"Candidate {rank}")
     filename        = result.get("filename", "")
 
@@ -245,6 +264,10 @@ def _candidate_section(rank: int, result: dict) -> list:
         f'<font color="#0B6FA4"><b>Overall Score:</b></font>  '
         f'<font face="Courier">{score_bar_text}</font>',
         ParagraphStyle("score_line", fontSize=10, leading=14, spaceAfter=4),
+    )
+    eligibility_para = Paragraph(
+        f'<font color="#0B6FA4"><b>AICTE Eligibility Role:</b></font> {eligibility_role}',
+        ParagraphStyle("aicte_role", fontSize=10, leading=14, spaceAfter=4),
     )
 
     # File label (small)
@@ -290,7 +313,7 @@ def _candidate_section(rank: int, result: dict) -> list:
     metrics_rows = [
         metrics_header,
         _metric_row("1. Research & Publications", "research_publications"),
-        _metric_row("2. Experience & Domain",     "experience_domain_alignment"),
+        _metric_row("2. Experience & Position Norms", "experience_position_norms"),
         _metric_row("3. Patents & Grants",        "patents_grants"),
         _metric_row("4. Leadership Roles",        "leadership_roles"),
         _metric_row("5. Professional Dev",        "professional_dev"),
@@ -319,6 +342,7 @@ def _candidate_section(rank: int, result: dict) -> list:
     block = KeepTogether([
         header_table,
         Spacer(1, 3 * mm),
+        eligibility_para,
         file_para,
         score_para,
         Spacer(1, 2 * mm),
@@ -328,6 +352,8 @@ def _candidate_section(rank: int, result: dict) -> list:
         Paragraph("<b>Detailed Metrics</b>", label_style),
         Spacer(1, 2 * mm),
         metrics_table,
+        Spacer(1, 3 * mm),
+        Paragraph("Comments / Remarks (For Official Use)", official_remarks_style),
         Spacer(1, 8 * mm),
         HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCCC"), spaceAfter=4),
     ])
@@ -365,7 +391,7 @@ def generate_match_report_pdf(
     story = []
 
     # Cover / JD summary
-    successful = [r for r in results if r.get("success")]
+    successful = sort_results_by_score([r for r in results if r.get("success")])
     story.extend(_cover_section(jd_data, len(successful)))
 
     # One block per successful candidate

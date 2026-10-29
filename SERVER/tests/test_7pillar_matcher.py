@@ -8,9 +8,9 @@ if server_dir not in sys.path:
     sys.path.insert(0, server_dir)
 
 from services.matcher import (
-    _match_skill_token,
     _classify_candidate_category,
-    _domain_alignment_score,
+    _score_pillar_2_experience_and_norms,
+    _score_pillar_6_technical_skills,
     match_resume_to_jd,
     FACULTY_WEIGHTS,
     CORPORATE_TEACHING_WEIGHTS,
@@ -26,39 +26,12 @@ from services.aicte_engine import (
 
 class TestSevenPillarMatcher(unittest.TestCase):
 
-    def test_skill_matching_precision(self):
-        """Verify exact token-boundary and synonym expansion matching."""
-        resume_skills = ["JavaScript", "Python", "ML", "Artificial Intelligence", "AWS"]
-
-        # 1. Java vs JavaScript (MUST NOT MATCH)
-        self.assertFalse(
-            _match_skill_token("Java", resume_skills),
-            "Failed: 'Java' should NOT match 'JavaScript'"
-        )
-
-        # 2. JavaScript vs JavaScript (MUST MATCH)
-        self.assertTrue(
-            _match_skill_token("JavaScript", resume_skills),
-            "Failed: 'JavaScript' should match 'JavaScript'"
-        )
-
-        # 3. Machine Learning vs ML (MUST MATCH via Synonym Taxonomy)
-        self.assertTrue(
-            _match_skill_token("Machine Learning", resume_skills),
-            "Failed: 'Machine Learning' should match 'ML'"
-        )
-
-        # 4. AI vs Artificial Intelligence (MUST MATCH via Synonym Taxonomy)
-        self.assertTrue(
-            _match_skill_token("AI", resume_skills),
-            "Failed: 'AI' should match 'Artificial Intelligence'"
-        )
-
-        # 5. Non-existent skill (MUST NOT MATCH)
-        self.assertFalse(
-            _match_skill_token("Ruby", resume_skills),
-            "Failed: 'Ruby' should NOT match"
-        )
+    def test_jd_skills_are_disabled(self):
+        """The general faculty evaluation does not compare skills with the JD."""
+        pillar = _score_pillar_6_technical_skills()
+        self.assertEqual(pillar["score"], 0)
+        self.assertEqual(pillar["matched_required"], [])
+        self.assertEqual(pillar["missing_required"], [])
 
     def test_candidate_classification(self):
         """Verify candidate category classification logic."""
@@ -79,21 +52,20 @@ class TestSevenPillarMatcher(unittest.TestCase):
         self.assertEqual(sum(FACULTY_WEIGHTS.values()), 100)
         self.assertEqual(sum(CORPORATE_TEACHING_WEIGHTS.values()), 100)
         self.assertEqual(sum(FRESHER_WEIGHTS.values()), 100)
+        self.assertEqual(FACULTY_WEIGHTS["technical_skills"], 0)
+        self.assertEqual(CORPORATE_TEACHING_WEIGHTS["technical_skills"], 0)
+        self.assertEqual(FRESHER_WEIGHTS["technical_skills"], 0)
 
-    def test_department_name_is_not_a_research_domain_requirement(self):
-        """A department-only JD should receive neutral domain treatment."""
-        jd = {
-            "job_title": "Assistant Professor - Department of Information Technology",
-            "key_domain": "Information Technology",
-            "research_domains": [],
-            "required_skills": ["Information Technology"],
-            "preferred_skills": ["emerging IT technologies"],
-        }
+    def test_experience_score_uses_position_norms(self):
         resume = {
-            "research_areas": ["Data Science"],
-            "extra_academic_fields": {"core_domain_specialization": "Data Science"},
+            "qualification": {"phd": {"status": "Completed"}},
+            "experience": {"total_years": 4, "post_phd_years": 1},
+            "total_indexed_publications": 0,
         }
-        self.assertEqual(_domain_alignment_score(resume, jd), 70)
+        aicte = evaluate_aicte_eligibility(resume, ["Associate Professor"])
+        pillar = _score_pillar_2_experience_and_norms(resume, aicte)
+        self.assertEqual(pillar["score"], 50)
+        self.assertIn("Post-Ph.D. experience", pillar["detail"])
 
     def test_aicte_eligibility_norms(self):
         """Verify Assistant, Associate, and Full Professor AICTE norms."""
@@ -171,7 +143,7 @@ class TestSevenPillarMatcher(unittest.TestCase):
 
         breakdown = result["breakdown"]
         self.assertIn("research_publications", breakdown)
-        self.assertIn("experience_domain_alignment", breakdown)
+        self.assertIn("experience_position_norms", breakdown)
         self.assertIn("patents_grants", breakdown)
         self.assertIn("leadership_roles", breakdown)
         self.assertIn("professional_dev", breakdown)
@@ -183,7 +155,7 @@ class TestSevenPillarMatcher(unittest.TestCase):
         print(f"Category: {result['candidate_category']}")
         print(f"Overall Score: {result['overall_score']}/100 ({result['grade']})")
         print("Breakdown:")
-        for k in ["research_publications", "experience_domain_alignment", "patents_grants",
+        for k in ["research_publications", "experience_position_norms", "patents_grants",
                   "leadership_roles", "professional_dev", "technical_skills", "education"]:
             p = breakdown[k]
             print(f"  - {k}: Score={p['score']}, Weight={p['weight_pct']}%, WeightedScore={p['weighted_score']}")

@@ -11,7 +11,7 @@ from db.models import MatchJob, MatchResult, AuditLog
 from services.file_service import extract_text_robust
 from services.llm_service import extract_resume_with_resilient_llm
 from services.matcher import match_resume_to_jd
-from services.report_export import write_tabular_report
+from services.report_export import write_tabular_report, write_excel_report
 from utils.generatereport import generate_match_report_pdf
 from core.config import settings
 
@@ -151,9 +151,11 @@ async def process_bulk_match_job(
         # 3. Generate PDF and CSV reports
         report_pdf_name = f"match_report_{job_id[:8]}.pdf"
         report_csv_name = f"faculty_report_{job_id[:8]}.csv"
+        report_excel_name = f"faculty_report_{job_id[:8]}.xlsx"
         
         pdf_output_path = os.path.join(settings.STATIC_DIR, report_pdf_name)
         csv_output_path = os.path.join(settings.STATIC_DIR, report_csv_name)
+        excel_output_path = os.path.join(settings.STATIC_DIR, report_excel_name)
 
         try:
             generate_match_report_pdf(
@@ -171,6 +173,11 @@ async def process_bulk_match_job(
             job.report_csv_path = f"/static/{report_csv_name}"
         except Exception as csv_e:
             print(f"CSV generation warning: {csv_e}")
+
+        try:
+            write_excel_report(excel_output_path, frontend_results)
+        except Exception as excel_e:
+            print(f"Excel generation warning: {excel_e}")
 
         # 4. Finalize Job Status
         successful_count = sum(1 for r in internal_results if r.get("success"))

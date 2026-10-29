@@ -1,55 +1,10 @@
-import json
 import re
-import requests
-import os
-import time
 from dotenv import load_dotenv
 from services.llm_providers.provider_manager import provider_manager
-from services.aicte_engine import evaluate_aicte_eligibility
-import re
-from services.llm_providers.provider_manager import provider_manager
 from services.aicte_engine import (evaluate_aicte_eligibility, normalize_positions,
-                                   POSITION_NORMS, to_int, to_float, profile_experience)
+                                   POSITION_NORMS, to_int, profile_experience)
 
 load_dotenv()
-
-
-# ---------------------------------------------------------------------------
-# SECTION 1 — Skill Taxonomy & Exact Token-Boundary Matching Engine
-# ---------------------------------------------------------------------------
-
-SKILL_TAXONOMY = {
-    "ml": ["machine learning"],
-    "machine learning": ["ml"],
-    "ai": ["artificial intelligence"],
-    "artificial intelligence": ["ai"],
-    "dl": ["deep learning"],
-    "deep learning": ["dl"],
-    "nlp": ["natural language processing"],
-    "natural language processing": ["nlp"],
-    "cv": ["computer vision"],
-    "computer vision": ["cv"],
-    "aws": ["amazon web services"],
-    "amazon web services": ["aws"],
-    "k8s": ["kubernetes"],
-    "kubernetes": ["k8s"],
-    "ci/cd": ["continuous integration", "continuous deployment", "cicd"],
-    "cicd": ["ci/cd", "continuous integration"],
-    "continuous integration": ["ci/cd", "cicd"],
-    "dbms": ["database management system", "sql", "relational database"],
-    "database management system": ["dbms", "sql"],
-    "iot": ["internet of things"],
-    "internet of things": ["iot"],
-    "vlsi": ["very large scale integration"],
-    "very large scale integration": ["vlsi"],
-    "cybersecurity": ["cyber security", "information security"],
-    "cyber security": ["cybersecurity", "information security"],
-    "cloud": ["cloud computing"],
-    "cloud computing": ["cloud"],
-    "ds": ["data science"],
-    "data science": ["ds"],
-    "qa": ["quality assurance"],
-}
 
 
 def _normalize(text) -> str:
@@ -64,16 +19,6 @@ def _normalize(text) -> str:
     return re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
 
 
-# def _is_academic_role(jd: dict) -> bool:
-#     """Check if the JD is for an academic, faculty, teaching, or research position."""
-#     text = (_normalize(jd.get("job_title", "")) + " " + _normalize(jd.get("key_domain", ""))).lower()
-#     academic_keywords = [
-#         "professor", "faculty", "lecturer", "dean", "hod", "academic",
-#         "teacher", "teaching", "researcher", "scientist", "instructor", "postdoc", "visiting faculty"
-#     ]
-#     return any(k in text for k in academic_keywords)
-
-
 def _classify_candidate_category(resume: dict) -> str:
     exp = profile_experience(resume)
     teaching, industrial, total = (exp[k] for k in ("teaching_years", "industrial_years", "total_years"))
@@ -84,115 +29,8 @@ def _classify_candidate_category(resume: dict) -> str:
     return "Faculty"
 
 
-def _skills_from_resume(resume: dict) -> list[str]:
-    """
-    Collect every skill/technology/domain from the resume:
-    - Skills section (all categories)
-    - Technologies listed in project blocks
-    - Core technical domain & specialization
-    - Academic qualification branches
-    """
-    skills = []
-
-    # From dedicated Skills section
-    skills_section = resume.get("Skills", {})
-    if isinstance(skills_section, dict):
-        for category, skill_list in skills_section.items():
-            if isinstance(skill_list, list):
-                skills.extend(skill_list)
-
-    # # From experience project technologies
-    # for exp in resume.get("Experience", {}).get("experiences", []):
-    #     if isinstance(exp, dict):
-    #         for proj in exp.get("projects", []):
-    #             if isinstance(proj, dict):
-    #                 for tech in proj.get("technologies", []):
-    #                     skills.append(tech)
-
-    # From extra academic fields
-    extras = resume.get("extra_academic_fields", {})
-    if isinstance(extras, dict):
-        core_domain = extras.get("core_domain_specialization", "")
-        if core_domain and isinstance(core_domain, str):
-            skills.extend([s.strip() for s in re.split(r'[,/|;]', core_domain) if s.strip()])
-
-    # From qualification branches
-    qual = resume.get("qualification", {})
-    if isinstance(qual, dict):
-        for deg in ["ug", "pg", "phd"]:
-            deg_obj = qual.get(deg, {})
-            if isinstance(deg_obj, dict):
-                branch = deg_obj.get("branch") or deg_obj.get("discipline")
-                if branch and isinstance(branch, str) and branch.lower() not in ["none", "not mentioned"]:
-                    skills.append(branch)
-
-    ra = resume.get("research_areas", [])
-    if isinstance(ra, list):
-        skills.extend(str(x) for x in ra if x)
-
-    return list(set(s for s in skills if s))
-
-
-def _match_skill_token(jd_skill: str, resume_skills: list[str]) -> bool:
-    """
-    Precision Token-Boundary & Taxonomy Skill Matcher.
-    - Uses regex word boundary \\b to prevent 'java' from matching 'javascript'.
-    - Uses SKILL_TAXONOMY map to match 'ml' with 'machine learning'.
-    """
-    jd_norm = _normalize(jd_skill)
-    if not jd_norm:
-        return False
-
-    synonyms = {jd_norm}
-    if jd_norm in SKILL_TAXONOMY:
-        synonyms.update(_normalize(s) for s in SKILL_TAXONOMY[jd_norm])
-
-    for r_skill in resume_skills:
-        r_norm = _normalize(r_skill)
-        if not r_norm:
-            continue
-
-        if jd_norm == r_norm or r_norm in synonyms:
-            return True
-
-        for syn in synonyms:
-            pattern = r'\b' + re.escape(syn) + r'\b'
-            if re.search(pattern, r_norm):
-                return True
-            r_pattern = r'\b' + re.escape(r_norm) + r'\b'
-            if len(r_norm) > 2 and re.search(r_pattern, syn):
-                return True
-
-    return False
-
-
-def _is_department_only_term(term: str, jd: dict) -> bool:
-    """Return True when a term is only a broad department label.
-
-    A JD such as "Assistant Professor - Department of Information Technology"
-    has a department but no research specialization. That label should not be
-    treated as a mandatory research match unless the JD explicitly names it as
-    a required technical domain.
-    """
-    normalized = _normalize(term)
-    key_domain = _normalize(jd.get("key_domain", ""))
-    broad_departments = {
-        "information technology",
-        "computer science",
-        "computer engineering",
-        "electronics and communication",
-        "electronics engineering",
-        "engineering",
-        "technology",
-    }
-    return (
-        normalized in broad_departments
-        and (not key_domain or normalized == key_domain)
-    )
-
-
 # ---------------------------------------------------------------------------
-# SECTION 2 — 7 Pillar Scoring Functions
+# SECTION 1 — 7 Pillar Scoring Functions
 # ---------------------------------------------------------------------------
 
 def _score_pillar_1_research_and_publications(resume: dict, jd: dict, aicte_result: dict) -> dict:
@@ -232,110 +70,37 @@ def _score_pillar_1_research_and_publications(resume: dict, jd: dict, aicte_resu
     return {"score": score, "detail": " | ".join(details)}
 
 
-def _domain_alignment_score(resume: dict, jd: dict) -> int:
-
-    required_terms = [
-        str(s)
-        for s in jd.get("required_skills", [])
-        if s and not _is_department_only_term(str(s), jd)
-    ]
-
-    research_terms = [
-        str(s)
-        for s in jd.get("research_domains", [])
-        if s
-    ]
-
-    resume_terms = _skills_from_resume(resume)
-
-    if not required_terms and not research_terms:
-        return 70
-
-    # Mandatory JD skills
-    required_hits = sum(
-        1 for term in required_terms
-        if _match_skill_token(term, resume_terms)
-    )
-
-    required_score = (
-        100 * required_hits / len(required_terms)
-        if required_terms else 100
-    )
-
-    # Preferred research domains
-    research_hits = sum(
-        1 for term in research_terms
-        if _match_skill_token(term, resume_terms)
-    )
-
-    research_score = (
-        100 * research_hits / len(research_terms)
-        if research_terms else 100
-    )
-
-    # Required skills matter more than preferred research areas
-    return round(
-        0.70 * required_score +
-        0.30 * research_score
-    )
-
-
-def _score_pillar_2_experience_and_domain(
-    resume: dict,
-    jd: dict,
-    aicte_result: dict
-) -> dict:
-
-    exp = resume.get("experience") or {}
-
+def _score_pillar_2_experience_and_norms(resume: dict, aicte_result: dict) -> dict:
+    """Score experience against position norms, without JD/domain matching."""
     normalized_exp = profile_experience(resume)
-    teaching = normalized_exp["teaching_years"]
-    industrial = normalized_exp["industrial_years"]
-    total = normalized_exp["total_years"]
-
-    required = to_float(jd.get("experience_required_years"))
     target = aicte_result.get("target_position")
-    norm_required = to_float((POSITION_NORMS.get(target) or {}).get("min_total_exp"))
-    # A faculty JD may omit years even though the institute norm requires them.
-    # Use the stricter of the explicit JD requirement and the selected position norm.
-    required = max(required, norm_required)
+    target_result = aicte_result.get("target_result") or {}
+    checks = [c for c in target_result.get("checks", []) if c.get("group") == "experience"]
 
-    # 1. JD experience fit
-    if required <= 0:
-        years_score = 85
-    elif total >= required:
-        # Meets JD requirement, small bonus for extra experience
-        years_score = min(
-            100,
-            round(85 + min(15, (total - required) * 2))
+    if checks:
+        # Each mandatory criterion contributes its progress ratio from the
+        # deterministic eligibility engine (total, post-Ph.D., or Associate-level years).
+        score = round(100 * sum(c.get("progress", 0) for c in checks) / len(checks))
+        detail = " | ".join(
+            f"{c['criterion']}: {c['actual']}/{c['required']} ({c['status']})" for c in checks
         )
     else:
-        years_score = round(
-            max(0, min(100, (total / required) * 100))
+        # Assistant Professor has no minimum experience requirement. Use total
+        # experience as a descriptive, capped eight-year scale for desirable experience.
+        total_years = normalized_exp["total_years"]
+        score = round(min(100, total_years / 8 * 100))
+        detail = (
+            f"No minimum experience norm for {target or 'this position'}; "
+            f"total experience {total_years} yrs (scored against an 8-year scale)"
         )
-
-    # 2. Domain fit
-    domain_score = _domain_alignment_score(resume, jd)
-
-    # 3. Final pillar score
-    final = round(
-        0.70 * years_score +
-        0.30 * domain_score
-    )
 
     return {
-        "score": final,
-        "detail": (
-            f"{total} yrs total "
-            f"({teaching} teaching/research, {industrial} industry) "
-            f"vs {required} yrs required | "
-            f"JD experience fit: {years_score}% | "
-            f"Domain fit: {domain_score}%"
-        )
+        "score": score,
+        "detail": detail,
     }
 
 
-def _score_pillar_3_patents_and_grants(resume: dict, jd: dict) -> dict:
+def _score_pillar_3_patents_and_grants(resume: dict) -> dict:
     """
     Pillar 3: Patents & Grants
     Evaluates patents filed/published/granted and sponsored research grants, industrial consultancy, and commercialized patents.
@@ -374,7 +139,7 @@ def _score_pillar_3_patents_and_grants(resume: dict, jd: dict) -> dict:
     }
 
 
-def _score_pillar_4_leadership_roles(resume: dict, jd: dict) -> dict:
+def _score_pillar_4_leadership_roles(resume: dict) -> dict:
     """
     Pillar 4: Administrative Leadership Roles
     Evaluates HOD, Dean, Controller of Examinations, Training & Placement Officer, Committee leadership.
@@ -411,7 +176,7 @@ def _score_pillar_4_leadership_roles(resume: dict, jd: dict) -> dict:
     }
 
 
-def _score_pillar_5_professional_dev(resume: dict, jd: dict) -> dict:
+def _score_pillar_5_professional_dev(resume: dict) -> dict:
     """
     Pillar 5: Professional Development
     Evaluates Accreditation & Quality Assurance (NBA SAR, NAAC, IQAC) + Professional Memberships & Up-skilling (IEEE/ACM, ISTE, NPTEL, FDPs).
@@ -443,58 +208,20 @@ def _score_pillar_5_professional_dev(resume: dict, jd: dict) -> dict:
     }
 
 
-def _score_pillar_6_technical_skills(resume: dict, jd: dict) -> dict:
-    """
-    Pillar 6: Technical Skills
-    Compares JD required and preferred skills against candidate skills using Exact Token-Boundary & Taxonomy Matcher.
-    """
-    resume_skills = _skills_from_resume(resume)
-
-    required = [
-        str(s) for s in jd.get("required_skills_normalized", [])
-        if s and not _is_department_only_term(str(s), jd)
-    ]
-    if not required:
-        required = [
-            _normalize(s) for s in jd.get("required_skills", [])
-            if s and not _is_department_only_term(str(s), jd)
-        ]
-    preferred = [
-        str(s) for s in jd.get("preferred_skills_normalized", [])
-        if s and not _is_department_only_term(str(s), jd)
-    ]
-    if not preferred:
-        preferred = [
-            _normalize(s) for s in jd.get("preferred_skills", [])
-            if s and not _is_department_only_term(str(s), jd)
-        ]
-
-    matched_required = [s for s in required if _match_skill_token(s, resume_skills)]
-    missing_required = [s for s in required if not _match_skill_token(s, resume_skills)]
-    matched_preferred = [s for s in preferred if _match_skill_token(s, resume_skills)]
-    missing_preferred = [s for s in preferred if not _match_skill_token(s, resume_skills)]
-
-    req_score = (len(matched_required) / len(required) * 100) if required else 100
-    pref_score = (len(matched_preferred) / len(preferred) * 100) if preferred else 100
-    final_score = round(req_score * 0.80 + pref_score * 0.20)
-
-    detail = f"{len(matched_required)}/{len(required)} required skills matched"
-    if preferred:
-        detail += f", {len(matched_preferred)}/{len(preferred)} preferred"
-
+def _score_pillar_6_technical_skills() -> dict:
+    """Keep the legacy report field, but do not score skills against this general JD."""
     return {
-        "score": final_score,
-        "matched_required": matched_required,
-        "missing_required": missing_required,
-        "matched_preferred": matched_preferred,
-        "missing_preferred": missing_preferred,
-        "detail": detail
+        "score": 0,
+        "matched_required": [],
+        "missing_required": [],
+        "matched_preferred": [],
+        "missing_preferred": [],
+        "detail": "Not scored: no JD-specific skill requirements are used",
     }
 
 
 def _score_pillar_7_education(
     resume: dict,
-    jd: dict,
     aicte_result: dict
 ) -> dict:
 
@@ -527,21 +254,30 @@ def _score_pillar_7_education(
         not in ("none", "not mentioned", "")
     )
 
-    if has_phd:
-        score = 100
-        detail = "Ph.D. completed"
+    target_result = aicte_result.get("target_result") or {}
+    education_checks = [
+        check for check in target_result.get("checks", [])
+        if check.get("group") == "education"
+    ]
+    if education_checks:
+        score = round(
+            100 * sum(check.get("progress", 0) for check in education_checks)
+            / len(education_checks)
+        )
+        detail = " | ".join(
+            f"{check['criterion']}: {check['status']}"
+            for check in education_checks
+        )
+    elif has_phd:
+        score, detail = 100, "Ph.D. completed; no target-position norm available"
     elif pursuing_phd:
-        score = 85
-        detail = "Ph.D. pursuing / thesis submitted"
+        score, detail = 85, "Ph.D. pursuing / thesis submitted; no target-position norm available"
     elif has_pg:
-        score = 75
-        detail = f"Master's degree ({pg.get('degree')})"
+        score, detail = 75, f"Master's degree ({pg.get('degree')}); no target-position norm available"
     elif has_ug:
-        score = 60
-        detail = f"Bachelor's degree ({ug.get('degree')})"
+        score, detail = 60, f"Bachelor's degree ({ug.get('degree')}); no target-position norm available"
     else:
-        score = 0
-        detail = "Education details not available"
+        score, detail = 0, "Education details not available"
 
     return {
         "score": score,
@@ -553,39 +289,38 @@ def _score_pillar_7_education(
 
 
 # ---------------------------------------------------------------------------
-# SECTION 3 — 7 Pillar Weight Allocation Matrix
+# SECTION 2 — 7 Pillar Weight Allocation Matrix
 # ---------------------------------------------------------------------------
 
 FACULTY_WEIGHTS = {
     "research_publications": 25,
-    "experience_domain_alignment": 40,
-    "patents_grants": 15,
+    "experience_position_norms": 35,
+    "patents_grants": 10,
     "leadership_roles": 5,
     "professional_dev": 5,
     "technical_skills": 0,
-    "education": 10,
+    "education": 20,
 }
 
 CORPORATE_TEACHING_WEIGHTS = {
-    "research_publications": 10,
-    "experience_domain_alignment": 40,
+    "research_publications": 15,
+    "experience_position_norms": 35,
     "patents_grants": 5,
     "leadership_roles": 5,
     "professional_dev": 10,
-    "technical_skills": 20,
-    "education": 10,
+    "technical_skills": 0,
+    "education": 30,
 }
 
 FRESHER_WEIGHTS = {
-    "research_publications": 15,
-    "experience_domain_alignment": 20,
+    "research_publications": 10,
+    "experience_position_norms": 10,
     "patents_grants": 5,
-    "leadership_roles": 10,
-    "professional_dev": 10,
-    "technical_skills": 30,
-    "education": 10,
+    "leadership_roles": 5,
+    "professional_dev": 15,
+    "technical_skills": 0,
+    "education": 55,
 }
-
 
 def _score_to_grade(score: int) -> str:
     if score >= 80:
@@ -642,10 +377,10 @@ Respond ONLY with JSON: {{"summary": "<text>"}}
 
 def match_resume_to_jd(resume: dict, jd: dict) -> dict:
     """
-    Master 7-Pillar Matching Engine.
+    Norm-focused seven-pillar matching engine.
     1. Evaluates AICTE Faculty Eligibility Norms via deterministic rule engine.
     2. Classifies candidate into category: Faculty, Corporate->Teaching, or Fresher.
-    3. Scores candidate across 7 distinct pillars incorporating all 7 Extra Academic Fields.
+    3. Scores candidates across seven general academic pillars without JD skill/domain matching.
     4. Computes final weighted overall score according to category weight matrix.
     5. Generates executive recruiter summary via T.C.R.A.F.T. system prompt.
     """
@@ -656,14 +391,14 @@ def match_resume_to_jd(resume: dict, jd: dict) -> dict:
     # 2. Candidate Classification
     category = _classify_candidate_category(resume)
 
-    # 3. 7 Pillar Scoring
+    # 3. 7 Pillar Scoring; JD skill and research-domain matching is disabled.
     p1 = _score_pillar_1_research_and_publications(resume, jd, aicte_result)
-    p2 = _score_pillar_2_experience_and_domain(resume, jd, aicte_result)
-    p3 = _score_pillar_3_patents_and_grants(resume, jd)
-    p4 = _score_pillar_4_leadership_roles(resume, jd)
-    p5 = _score_pillar_5_professional_dev(resume, jd)
-    p6 = _score_pillar_6_technical_skills(resume, jd)
-    p7 = _score_pillar_7_education(resume, jd, aicte_result)
+    p2 = _score_pillar_2_experience_and_norms(resume, aicte_result)
+    p3 = _score_pillar_3_patents_and_grants(resume)
+    p4 = _score_pillar_4_leadership_roles(resume)
+    p5 = _score_pillar_5_professional_dev(resume)
+    p6 = _score_pillar_6_technical_skills()
+    p7 = _score_pillar_7_education(resume, aicte_result)
 
     # 4. Weight Selection based on Candidate Category
     if category == "Corporate->Teaching":
@@ -681,10 +416,10 @@ def match_resume_to_jd(resume: dict, jd: dict) -> dict:
             "weighted_score": round(p1["score"] * (weights["research_publications"] / 100.0), 2),
             "detail": p1["detail"]
         },
-        "experience_domain_alignment": {
+        "experience_position_norms": {
             "score": p2["score"],
-            "weight_pct": weights["experience_domain_alignment"],
-            "weighted_score": round(p2["score"] * (weights["experience_domain_alignment"] / 100.0), 2),
+            "weight_pct": weights["experience_position_norms"],
+            "weighted_score": round(p2["score"] * (weights["experience_position_norms"] / 100.0), 2),
             "detail": p2["detail"]
         },
         "patents_grants": {
@@ -731,7 +466,7 @@ def match_resume_to_jd(resume: dict, jd: dict) -> dict:
     # Sum of weighted scores
     overall_score = round(sum(
         breakdown[k]["weighted_score"]
-        for k in ["research_publications", "experience_domain_alignment", "patents_grants",
+        for k in ["research_publications", "experience_position_norms", "patents_grants",
                   "leadership_roles", "professional_dev", "technical_skills", "education"]
     ))
     overall_score = max(0, min(100, overall_score))

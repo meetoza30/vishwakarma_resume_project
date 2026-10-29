@@ -172,6 +172,11 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
         "processed_resumes": job.processed_resumes,
         "report_pdf_url": job.report_pdf_path,
         "report_csv_url": job.report_csv_path,
+        "report_excel_url": (
+            f"/static/faculty_report_{job.id[:8]}.xlsx"
+            if job.report_csv_path
+            else None
+        ),
         "results": results_list,
         "error_message": job.error_message
     }
