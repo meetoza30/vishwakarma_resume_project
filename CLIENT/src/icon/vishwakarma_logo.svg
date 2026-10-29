@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 450 120" width="450" height="120">
+  <g transform="translate(10, 10)">
+    <!-- Stylized 'V' Wing Icon -->
+    <path d="M 15 15 L 65 95 L 85 95 L 45 35 L 75 35 L 90 60 L 80 15 Z" fill="#0073cb" />
+    <path d="M 50 40 L 70 85 L 80 85 L 60 50 Z" fill="#4fa8e8" opacity="0.8" />
+    <!-- Red Accent Dot -->
+    <circle cx="85" cy="22" r="7" fill="#e31b23" />
+  </g>
+  
+  <!-- Text Block -->
+  <text x="110" y="60" font-family="'Plus Jakarta Sans', Arial, sans-serif" font-weight="900" font-size="34" fill="#0073cb" letter-spacing="1">
+    VISHWAKARMA
+  </text>
+  <text x="355" y="60" font-family="'Plus Jakarta Sans', Arial, sans-serif" font-weight="900" font-size="34" fill="#0073cb" letter-spacing="1">
+    GROUP
+  </text>
+  <text x="112" y="88" font-family="'Plus Jakarta Sans', Arial, sans-serif" font-weight="500" font-size="17" fill="#0073cb" letter-spacing="0.5">
+    One Vishwakarma, One Family
+  </text>
+</svg>

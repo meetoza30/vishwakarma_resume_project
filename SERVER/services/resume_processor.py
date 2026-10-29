@@ -1,0 +1,27 @@
+from fastapi import HTTPException
+from services.resume_extraction import extract_text_preserving_layout, extract_resume_json
+
+def process_resume_file(file_path: str) -> dict:
+    """
+    Process a resume PDF or DOCX file and return extracted data.
+    
+    Args:
+        file_path: Path to the uploaded resume PDF or DOCX
+        
+    Returns:
+        dict: Extracted resume data
+    """
+    full_text = extract_text_preserving_layout(file_path)
+    # print("full_text",full_text)
+    
+    if not full_text:
+        raise HTTPException(status_code=400, detail="Empty or unreadable file")
+        
+    extracted_data = extract_resume_json(full_text)
+    if not extracted_data:
+        raise HTTPException(status_code=500, detail="Failed to extract data using LLM after retries.")
+        
+    import json
+    print("\n=== FINAL PROCESSED RESUME JSON ===")
+    print(json.dumps(extracted_data, indent=4))
+    return extracted_data
