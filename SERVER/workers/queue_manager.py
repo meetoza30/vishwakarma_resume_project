@@ -2,7 +2,6 @@ import os
 import asyncio
 import traceback
 from typing import List, Dict, Any
-from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy.orm import Session
 
@@ -11,7 +10,13 @@ from db.models import MatchJob, MatchResult, AuditLog
 from services.file_service import extract_text_robust
 from services.llm_service import extract_resume_with_resilient_llm
 from services.matcher import match_resume_to_jd
-from services.report_export import write_tabular_report, write_excel_report
+from services.report_export import (
+    write_tabular_report,
+    write_excel_report,
+    dated_report_filename,
+    report_now,
+    aicte_eligible_role,
+)
 from utils.generatereport import generate_match_report_pdf
 from core.config import settings
 
@@ -82,6 +87,7 @@ async def process_bulk_match_job(
                     "email_id": match_result.get("email_id"),
                     "qualification": match_result.get("qualification"),
                     "target_position": match_result.get("target_position"),
+                    "aicte_eligibility_role": aicte_eligible_role(match_result),
                     "total_publications": match_result.get("total_publications", 0),
                     "total_indexed_publications": match_result.get("total_indexed_publications", 0),
                     "research_areas": match_result.get("research_areas", []),
@@ -149,9 +155,10 @@ async def process_bulk_match_job(
         frontend_results = [results_by_idx[i][1] for i in range(1, total_files + 1)]
 
         # 3. Generate PDF and CSV reports
-        report_pdf_name = f"match_report_{job_id[:8]}.pdf"
+        report_date = report_now()
+        report_pdf_name = dated_report_filename("pdf", "pdf", job_id[:8], report_date)
         report_csv_name = f"faculty_report_{job_id[:8]}.csv"
-        report_excel_name = f"faculty_report_{job_id[:8]}.xlsx"
+        report_excel_name = dated_report_filename("excel", "xlsx", job_id[:8], report_date)
         
         pdf_output_path = os.path.join(settings.STATIC_DIR, report_pdf_name)
         csv_output_path = os.path.join(settings.STATIC_DIR, report_csv_name)

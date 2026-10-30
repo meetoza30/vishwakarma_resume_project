@@ -14,6 +14,8 @@ from services.report_export import (  # noqa: E402
     EXCEL_REPORT_HEADERS,
     TABULAR_REPORT_HEADERS,
     build_tabular_report_row,
+    dated_report_filename,
+    aicte_eligible_role,
     write_excel_report,
     write_tabular_report,
 )
@@ -115,6 +117,8 @@ def test_excel_report_matches_template_columns_and_sorts_by_score(tmp_path):
     lower["aicte_eligibility"] = {
         "target_position": "Assistant Professor",
         "primary_recommended_status": "Eligible - Assistant Professor",
+        "assistant_professor": {"eligible": True},
+        "target_result": {"eligible": True, "checks": []},
     }
     higher = _result()
     higher["candidate_name"] = "Higher Score Candidate"
@@ -125,8 +129,11 @@ def test_excel_report_matches_template_columns_and_sorts_by_score(tmp_path):
     workbook = openpyxl.load_workbook(output, data_only=True)
     sheet = workbook.active
 
-    assert sheet.max_column == 21  # Template includes a leading spacer column A.
-    assert [sheet.cell(9, col).value for col in range(2, 22)] == EXCEL_REPORT_HEADERS
+    assert sheet.max_column == 22  # A spacer column plus 21 report columns.
+    assert [sheet.cell(9, col).value for col in range(2, 23)] == EXCEL_REPORT_HEADERS
+    assert sheet["B8"].value is None
+    assert all("AICTE Eligibility Role" not in str(sheet.cell(row, col).value)
+               for row in range(1, sheet.max_row + 1) for col in range(1, sheet.max_column + 1))
     assert sheet.cell(10, 4).value == "Higher Score Candidate"
     assert sheet.cell(10, 8).value == 91
     assert sheet.cell(11, 4).value == "Lower Score Candidate"
@@ -135,19 +142,62 @@ def test_excel_report_matches_template_columns_and_sorts_by_score(tmp_path):
     assert sheet.cell(11, 7).value == "anuradha2002rai@gmail.com"
     assert sheet.cell(11, 8).value == 44
     assert "Experience & Norms: 72/100" in sheet.cell(11, 9).value
-    assert "Technical Skills: Not Scored" in sheet.cell(11, 9).value
-    assert sheet.cell(11, 10).value == "UG: B.Tech | PG: M.Tech | Ph.D.: None"
-    assert sheet.cell(11, 11).value == 2
-    assert sheet.cell(11, 12).value == "Nil"
+    assert "Technical Skills" not in sheet.cell(11, 9).value
+    assert "UG: B.Tech" in sheet.cell(11, 10).value
+    assert "PG: M.Tech" in sheet.cell(11, 10).value
+    assert "Ph.D.: None" in sheet.cell(11, 10).value
+    assert sheet.cell(11, 11).value == "Deep Learning, Intrusion Detection"
+    assert sheet.cell(11, 12).value == 2
     assert sheet.cell(11, 13).value == "Nil"
-    assert sheet.cell(11, 14).value == "Teaching/Research: 3.3 Yrs, Industry: 0 Yrs (Total: 3.3 Yrs)"
-    assert sheet.cell(11, 15).value == "• Institute A\n• Institute B"
-    assert sheet.cell(11, 16).value == "Eligible - Assistant Professor"
-    assert sheet.cell(11, 17).value is None  # Salary fields are official-use only.
+    assert sheet.cell(11, 14).value == "Nil"
+    assert sheet.cell(11, 15).value == "Teaching/Research: 3.3 Yrs, Industry: 0 Yrs (Total: 3.3 Yrs)"
+    assert sheet.cell(11, 16).value == "• Institute A\n• Institute B"
+    assert sheet.cell(11, 17).value == "Assistant Professor"
+    assert sheet.cell(11, 18).value is None  # Salary fields are official-use only.
     assert sheet.cell(11, 3).value is None  # Official scheduling is left blank.
-    assert sheet.cell(11, 21).value is None  # Official remarks are left blank.
+    assert sheet.cell(11, 22).value is None  # Official remarks are left blank.
     assert sheet.freeze_panes is None
     assert sheet.page_setup.orientation == "landscape"
+
+
+def test_excel_distinguishes_applied_role_from_failed_norm_eligibility(tmp_path):
+    candidate = _result()
+    candidate["target_position"] = "Associate Professor"
+    candidate["aicte_eligibility"] = {
+        "target_position": "Associate Professor",
+        "primary_recommended_status": "Eligible - Assistant Professor",
+        "assistant_professor": {"eligible": True},
+        "associate_professor": {"eligible": False},
+        "target_result": {
+            "eligible": False,
+            "status": "Not Eligible",
+            "checks": [
+                {"name": "Ph.D. completed", "status": "fail"},
+                {"name": "Post-Ph.D. experience", "status": "fail"},
+            ],
+        },
+    }
+    output = tmp_path / "ineligible_associate.xlsx"
+
+    write_excel_report(output, [candidate])
+    sheet = openpyxl.load_workbook(output, data_only=True).active
+
+    # E is Applied for Post; Q is the independently recommended eligible role.
+    assert sheet.cell(10, 5).value == "Associate Professor"
+    assert sheet.cell(10, 17).value == "Assistant Professor"
+    assert aicte_eligible_role(candidate) == "Assistant Professor"
+
+
+def test_aicte_role_strips_eligible_prefix_and_handles_no_eligible_role():
+    assert aicte_eligible_role({
+        "aicte_eligibility": {
+            "primary_recommended_status": "Eligible - Professor",
+        }
+    }) == "Professor"
+    assert aicte_eligible_role({
+        "aicte_eligibility": {"primary_recommended_status": "Not Eligible - Needs Verification"}
+    }) == "Not Eligible"
+    assert aicte_eligible_role({}) == "Not Evaluated"
 
 
 def test_pdf_report_shows_aicte_role_remarks_and_score_order(tmp_path):
@@ -155,7 +205,12 @@ def test_pdf_report_shows_aicte_role_remarks_and_score_order(tmp_path):
         result = _result()
         result["candidate_name"] = name
         result["overall_score"] = score
-        result["aicte_eligibility"] = {"primary_recommended_status": role}
+        result["aicte_eligibility"] = {
+            "primary_recommended_status": role,
+            "assistant_professor": {"eligible": True},
+            "associate_professor": {"eligible": "Associate Professor" in role},
+            "target_result": {"eligible": True, "checks": []},
+        }
         return {"filename": f"{name}.pdf", "success": True, "match": result}
 
     output = tmp_path / "match_report.pdf"
@@ -172,6 +227,17 @@ def test_pdf_report_shows_aicte_role_remarks_and_score_order(tmp_path):
         text = " ".join(page.extract_text() or "" for page in pdf.pages)
     normalized = " ".join(text.split())
     assert normalized.index("Higher Score Candidate") < normalized.index("Lower Score Candidate")
-    assert "AICTE Eligibility Role" in normalized
-    assert "Eligible - Associate Professor" in normalized
+    assert "Match Report" in normalized
+    assert "Role: Associate Professor" in normalized
+    assert "Technical Skills" not in normalized
+    assert "Eligible - Associate Professor" not in normalized
+    assert "AICTE Eligibility: Associate Professor" in normalized
     assert "Comments / Remarks (For Official Use)" in normalized
+
+
+def test_report_filenames_are_date_first_and_job_unique():
+    from datetime import datetime
+
+    stamp = datetime(2026, 10, 30, 12, 0)
+    assert dated_report_filename("pdf", "pdf", now=stamp) == "30.10.2026_match_report_pdf.pdf"
+    assert dated_report_filename("excel", "xlsx", "abcd1234", stamp) == "30.10.2026_match_report_excel_abcd1234.xlsx"

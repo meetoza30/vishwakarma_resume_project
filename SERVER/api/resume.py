@@ -2,8 +2,8 @@ import tempfile
 import os
 import shutil
 import json
-from datetime import datetime
-from typing import List, Optional
+import re
+from typing import List
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
@@ -11,10 +11,13 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from core.config import settings
 from services.resume_processor import process_resume_file
-from services.resume_extraction import extract_text_preserving_layout
-from services.jdExtracter import extract_jd_with_llm
-from services.matcher import match_resume_to_jd
-from services.report_export import write_tabular_report, write_excel_report
+from services.matcher import match_resume_to_jd, get_permanent_jd_data, normalize_selected_role
+from services.report_export import (
+    write_tabular_report,
+    write_excel_report,
+    dated_report_filename,
+    aicte_eligible_role,
+)
 from utils.generatepdf import generate_resume_pdf
 from utils.generatereport import generate_match_report_pdf
 from middleware.rate_limiter import check_rate_limit, increment_active, decrement_active
@@ -134,24 +137,19 @@ async def generate_resume(request: Request):
 @router.post("/match-bulk")
 async def match_bulk_resumes(
     request: Request,
-    jd_file: Optional[UploadFile] = File(None),
-    jd_text: Optional[str] = Form(None),
+    target_position: str = Form(...),
     resume_files: List[UploadFile] = File(...)
 ):
     """
-    Bulk match resumes against a single Job Description.
-
-    JD input (provide exactly one):
-      - jd_file: The JD as a PDF or DOCX file upload
-      - jd_text: The JD as a plain-text form field
-      - resume_files: One or more candidate resume PDFs or DOCX files.
+    Bulk match resumes against the institution's stored norms for a selected role.
 
     Response:
       - results[]: per-candidate { filename, overall_score, grade, summary }
       - report_url: URL to download the generated PDF report (when >1 resume)
     """
-    if not jd_file and not jd_text:
-        raise HTTPException(status_code=400, detail="Either jd_file or jd_text must be provided.")
+    selected_role = normalize_selected_role(target_position)
+    if not selected_role:
+        raise HTTPException(status_code=400, detail="Select Assistant Professor, Associate Professor, or Professor.")
 
     if not resume_files or len(resume_files) == 0:
         raise HTTPException(status_code=400, detail="At least one resume file must be uploaded.")
@@ -164,29 +162,10 @@ async def match_bulk_resumes(
                 detail=f"Only PDF and DOCX files are accepted. Invalid file: {rf.filename}"
             )
 
-    if jd_file and not jd_file.filename.lower().endswith(valid_exts):
-        raise HTTPException(status_code=400, detail="Only PDF and DOCX files are accepted for jd_file.")
-
     temp_dir = tempfile.mkdtemp()
 
     try:
-        if jd_file:
-            print(f"Extracting text from JD file: {jd_file.filename}")
-            jd_temp_path = os.path.join(temp_dir, jd_file.filename)
-            with open(jd_temp_path, "wb") as buffer:
-                buffer.write(await jd_file.read())
-            parsed_jd_text = extract_text_preserving_layout(jd_temp_path)
-            if not parsed_jd_text:
-                raise HTTPException(status_code=400, detail="Failed to read text from uploaded JD file.")
-        else:
-            parsed_jd_text = (jd_text or "").strip()
-            if not parsed_jd_text:
-                raise HTTPException(status_code=400, detail="Provided jd_text is empty.")
-
-        print("Extracting JD structure via LLM...")
-        jd_data = extract_jd_with_llm(parsed_jd_text)
-        if not jd_data:
-            raise HTTPException(status_code=500, detail="Failed to extract Job Description data via LLM.")
+        jd_data = get_permanent_jd_data(selected_role)
 
         # 1. Save uploaded resume files to disk asynchronously first
         file_tasks = []
@@ -225,6 +204,7 @@ async def match_bulk_resumes(
                     "email_id": match_result.get("email_id"),
                     "qualification": match_result.get("qualification"),
                     "target_position": match_result.get("target_position"),
+                    "aicte_eligibility_role": aicte_eligible_role(match_result),
                     "total_publications": match_result.get("total_publications", 0),
                     "total_indexed_publications": match_result.get("total_indexed_publications", 0),
                     "scopus_post_phd_publications": match_result.get("scopus_post_phd_publications"),
@@ -259,9 +239,9 @@ async def match_bulk_resumes(
         report_download_url = None
         csv_download_url = None
         excel_download_url = None
-        report_filename = "match_report.pdf"
+        report_filename = dated_report_filename("pdf", "pdf")
         csv_filename = "faculty_screening_report.csv"
-        excel_filename = "faculty_screening_report.xlsx"
+        excel_filename = dated_report_filename("excel", "xlsx")
         report_path = os.path.join(STATIC_DIR, report_filename)
         csv_path = os.path.join(STATIC_DIR, csv_filename)
         excel_path = os.path.join(STATIC_DIR, excel_filename)
@@ -272,7 +252,7 @@ async def match_bulk_resumes(
                 jd_data=jd_data,
                 output_path=report_path,
             )
-            report_download_url = "/download-match-report"
+            report_download_url = f"/download-match-report?filename={report_filename}"
             print(f"Match report saved: {report_path}")
         except Exception as pdf_e:
             print(f"PDF report generation failed (non-fatal): {pdf_e}")
@@ -287,13 +267,14 @@ async def match_bulk_resumes(
 
         try:
             write_excel_report(excel_path, frontend_results)
-            excel_download_url = "/download-excel-report"
+            excel_download_url = f"/download-excel-report?filename={excel_filename}"
             print(f"Excel report saved: {excel_path}")
         except Exception as excel_e:
             print(f"Excel report generation failed: {excel_e}")
 
         response_data = {
             "success": True,
+            "target_position": selected_role,
             "results": frontend_results,
             "report_download_url": report_download_url,
             "csv_download_url": csv_download_url,
@@ -310,22 +291,25 @@ async def match_bulk_resumes(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 @router.get("/download-match-report")
-async def download_match_report():
+async def download_match_report(filename: str = None):
     """
     Download the most recently generated bulk match PDF report.
     """
-    report_path = os.path.join(STATIC_DIR, "match_report.pdf")
+    expected_filename = dated_report_filename("pdf", "pdf")
+    if filename and not re.fullmatch(r"\d{2}\.\d{2}\.\d{4}_match_report_pdf\.pdf", filename):
+        raise HTTPException(status_code=400, detail="Invalid report filename.")
+    filename = filename or expected_filename
+    report_path = os.path.join(STATIC_DIR, filename)
     if not os.path.exists(report_path):
         raise HTTPException(
             status_code=404,
             detail="No match report found. Run /match-bulk first to generate one."
         )
-    date_str = datetime.now().strftime("%d_%m_%y")
     return FileResponse(
         path=report_path,
-        filename=f"match_report_{date_str}.pdf",
+        filename=filename,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="match_report_{date_str}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 @router.get("/download-csv-report")
@@ -339,48 +323,30 @@ async def download_csv_report():
             status_code=404,
             detail="No CSV match report found. Run /match-bulk first to generate one."
         )
-    date_str = datetime.now().strftime("%d_%m_%y")
     return FileResponse(
         path=csv_path,
-        filename=f"faculty_screening_report_{date_str}.csv",
+        filename="faculty_screening_report.csv",
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="faculty_screening_report_{date_str}.csv"'},
+        headers={"Content-Disposition": 'attachment; filename="faculty_screening_report.csv"'},
     )
 
 
 @router.get("/download-excel-report")
-async def download_excel_report():
+async def download_excel_report(filename: str = None):
     """Download the formatted Excel candidate information sheet."""
-    excel_path = os.path.join(STATIC_DIR, "faculty_screening_report.xlsx")
+    expected_filename = dated_report_filename("excel", "xlsx")
+    if filename and not re.fullmatch(r"\d{2}\.\d{2}\.\d{4}_match_report_excel\.xlsx", filename):
+        raise HTTPException(status_code=400, detail="Invalid report filename.")
+    filename = filename or expected_filename
+    excel_path = os.path.join(STATIC_DIR, filename)
     if not os.path.exists(excel_path):
         raise HTTPException(
             status_code=404,
             detail="No Excel match report found. Run /match-bulk first to generate one.",
         )
-    date_str = datetime.now().strftime("%d_%m_%y")
     return FileResponse(
         path=excel_path,
-        filename=f"faculty_screening_report_{date_str}.xlsx",
+        filename=filename,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="faculty_screening_report_{date_str}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-@router.post("/extract-jd")
-async def extract_jd(request: Request):
-    """
-    Parse and structure a raw Job Description text.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
- 
-    jd_text = body.get("jd_text", "").strip()
-    if not jd_text:
-        raise HTTPException(status_code=400, detail="jd_text is required")
- 
-    jd_data = extract_jd_with_llm(jd_text)
-    if not jd_data:
-        raise HTTPException(status_code=500, detail="Failed to extract JD data via LLM.")
- 
-    return {"success": True, "data": jd_data}

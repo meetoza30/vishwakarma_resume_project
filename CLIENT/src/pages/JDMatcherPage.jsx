@@ -41,10 +41,7 @@ function playCompletionChime() {
 function JDMatcherPage({ onMatchComplete }) {
   const navigate = useNavigate();
 
-  const [jdMode, setJdMode] = useState('text');
-  const [jdText, setJdText] = useState('');
-  const [jdFile, setJdFile] = useState(null);
-  const jdFileRef = useRef(null);
+  const [targetPosition, setTargetPosition] = useState('');
   const [resumeFiles, setResumeFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const resumeInputRef = useRef(null);
@@ -85,14 +82,6 @@ function JDMatcherPage({ onMatchComplete }) {
     }
   };
 
-  /* ---- JD FILE HANDLERS ---- */
-  const handleJdFileSelect = (e) => {
-    const f = e.target.files[0];
-    const isVal = f && (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf') || f.name.toLowerCase().endsWith('.docx') || f.name.toLowerCase().endsWith('.doc') || f.type.includes('word'));
-    if (isVal) setJdFile(f);
-    else if (f) setError('JD file must be a PDF or DOCX file.');
-  };
-
   /* ---- RESUME FILE HANDLERS ---- */
   const addResumes = (files) => {
     const validFiles = Array.from(files).filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf') || f.name.toLowerCase().endsWith('.docx') || f.name.toLowerCase().endsWith('.doc') || f.type.includes('word'));
@@ -123,16 +112,11 @@ function JDMatcherPage({ onMatchComplete }) {
     }
 
     // Validation
-    if (jdMode === 'text' && !jdText.trim()) return setError('Please paste the Job Description / Faculty Requirement text.');
-    if (jdMode === 'file' && !jdFile) return setError('Please upload a JD PDF or DOCX file.');
+    if (!targetPosition) return setError('Please select a faculty position.');
     if (resumeFiles.length === 0) return setError('Please upload at least one resume (up to 10 resumes at a time).');
 
     const formData = new FormData();
-    if (jdMode === 'text') {
-      formData.append('jd_text', jdText.trim());
-    } else {
-      formData.append('jd_file', jdFile);
-    }
+    formData.append('target_position', targetPosition);
     resumeFiles.forEach(f => formData.append('resume_files', f));
 
     setIsLoading(true);
@@ -191,7 +175,7 @@ function JDMatcherPage({ onMatchComplete }) {
             </div>
             <div>
               <h2 className="jdm-title">Faculty Resume & AICTE Eligibility Analyzer</h2>
-              <p className="jdm-subtitle">Batch analysis of up to 10 resumes against AICTE Norms & JD Requirements</p>
+              <p className="jdm-subtitle">Batch analysis of up to 10 resumes against the selected AICTE position norms</p>
             </div>
           </div>
           {/* ---- Submit ---- */}
@@ -237,7 +221,7 @@ function JDMatcherPage({ onMatchComplete }) {
           </div>
           <div>
             <h2 className="jdm-title">Resume analyzer</h2>
-            <p className="jdm-subtitle">Match multiple resumes against a single Job Description</p>
+            <p className="jdm-subtitle">Select a faculty position, then upload resumes for evaluation</p>
           </div>
         </div>
         {/* ---- Submit ---- */}
@@ -280,79 +264,26 @@ function JDMatcherPage({ onMatchComplete }) {
       )}
 
       <div className="jdm-sections-row">
-        {/* ---- Section 1: Job Description ---- */}
+        {/* ---- Section 1: Select stored faculty criteria ---- */}
         <section className="jdm-section glass-card">
           <div className="jdm-section-label">
             <span className="jdm-step">1</span>
-            <h3 className="jdm-section-title">Job Description</h3>
+            <h3 className="jdm-section-title">Select Position</h3>
           </div>
-
-          {/* Toggle tabs */}
-          <div className="jdm-toggle-tabs" role="tablist">
-            <button
-              id="tab-paste"
-              role="tab"
-              aria-selected={jdMode === 'text'}
-              className={`jdm-tab ${jdMode === 'text' ? 'active' : ''}`}
-              onClick={() => setJdMode('text')}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="17" y1="10" x2="3" y2="10" /><line x1="21" y1="6" x2="3" y2="6" /><line x1="21" y1="14" x2="3" y2="14" /><line x1="17" y1="18" x2="3" y2="18" />
-              </svg>
-              Paste Text
-            </button>
-            <button
-              id="tab-pdf"
-              role="tab"
-              aria-selected={jdMode === 'file'}
-              className={`jdm-tab ${jdMode === 'file' ? 'active' : ''}`}
-              onClick={() => setJdMode('file')}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
-              </svg>
-              Upload File
-            </button>
+          <p className="jdm-subtitle">The selected role determines which stored AICTE norms are applied.</p>
+          <div className="jdm-role-options" role="group" aria-label="Faculty position">
+            {['Assistant Professor', 'Associate Professor', 'Professor'].map(role => (
+              <button
+                key={role}
+                type="button"
+                className={`jdm-role-button ${targetPosition === role ? 'active' : ''}`}
+                aria-pressed={targetPosition === role}
+                onClick={() => setTargetPosition(role)}
+              >
+                {role}
+              </button>
+            ))}
           </div>
-
-          {/* Panel: Paste text */}
-          {jdMode === 'text' && (
-            <div className="jdm-panel" role="tabpanel" aria-labelledby="tab-paste">
-              <textarea
-                id="jd_text"
-                name="jd_text"
-                className="jdm-textarea"
-                placeholder="Paste the full Job Description here…"
-                value={jdText}
-                onChange={e => setJdText(e.target.value)}
-                rows={10}
-              />
-              <div className="jdm-char-count">{jdText.length} chars</div>
-            </div>
-          )}
-
-          {/* Panel: Upload JD PDF */}
-          {jdMode === 'file' && (
-            <div className="jdm-panel" role="tabpanel" aria-labelledby="tab-pdf">
-              {jdFile ? (
-                <div className="jdm-file-chip">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  <span>{jdFile.name}</span>
-                  <button className="jdm-chip-remove" onClick={() => setJdFile(null)} aria-label="Remove JD file">×</button>
-                </div>
-              ) : (
-                <button className="jdm-upload-jd-btn" onClick={() => jdFileRef.current?.click()}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" />
-                  </svg>
-                  Click to upload JD (PDF/DOCX)
-                </button>
-              )}
-              <input ref={jdFileRef} type="file" name="jd_file" accept=".pdf,.docx,.doc" onChange={handleJdFileSelect} style={{ display: 'none' }} />
-            </div>
-          )}
         </section>
 
         {/* ---- Section 2: Resume Upload ---- */}

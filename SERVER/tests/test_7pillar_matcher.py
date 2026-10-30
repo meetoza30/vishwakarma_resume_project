@@ -14,7 +14,9 @@ from services.matcher import (
     match_resume_to_jd,
     FACULTY_WEIGHTS,
     CORPORATE_TEACHING_WEIGHTS,
-    FRESHER_WEIGHTS
+    FRESHER_WEIGHTS,
+    get_permanent_jd_data,
+    normalize_selected_role,
 )
 from services.aicte_engine import (
     evaluate_assistant_professor,
@@ -25,6 +27,14 @@ from services.aicte_engine import (
 
 
 class TestSevenPillarMatcher(unittest.TestCase):
+
+    def test_role_selection_uses_only_supported_stored_positions(self):
+        self.assertEqual(normalize_selected_role("assistant professor"), "Assistant Professor")
+        self.assertEqual(normalize_selected_role("Associate Professor"), "Associate Professor")
+        self.assertEqual(normalize_selected_role("PROFESSOR"), "Professor")
+        self.assertIsNone(normalize_selected_role("Dean"))
+        self.assertEqual(get_permanent_jd_data("Associate Professor")["min_publications"], 6)
+        self.assertEqual(get_permanent_jd_data("Professor")["experience_required_years"], 10)
 
     def test_jd_skills_are_disabled(self):
         """The general faculty evaluation does not compare skills with the JD."""

@@ -2,7 +2,7 @@ import os
 import uuid
 import tempfile
 import shutil
-from typing import List, Optional
+from typing import List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request, BackgroundTasks, Depends
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -11,8 +11,8 @@ from db.session import get_db
 from db.models import MatchJob, MatchResult, Resume as ResumeModel, AuditLog
 from services.file_service import validate_file_upload, extract_text_robust, compute_file_hash
 from services.llm_service import extract_resume_with_resilient_llm
-from services.jdExtracter import extract_jd_with_llm
-from services.matcher import match_resume_to_jd
+from services.matcher import match_resume_to_jd, get_permanent_jd_data, normalize_selected_role
+from services.report_export import dated_report_filename
 from workers.queue_manager import process_bulk_match_job
 from utils.generatereport import generate_match_report_pdf
 from core.config import settings
@@ -69,45 +69,24 @@ async def extract_resume(file: UploadFile = File(...), db: Session = Depends(get
 @router.post("/match-bulk")
 async def match_bulk_resumes(
     background_tasks: BackgroundTasks,
-    jd_file: Optional[UploadFile] = File(None),
-    jd_text: Optional[str] = Form(None),
+    target_position: str = Form(...),
     resume_files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
     """
     Production Async Bulk Match Endpoint:
-    - Accepts Job Description (text or file) + up to N resume files.
+    - Accepts a selected faculty position + up to N resume files.
     - Validates all uploads synchronously.
     - Creates a background Job ID and processes matching asynchronously so the API remains responsive!
     """
-    if not jd_file and not jd_text:
-        raise HTTPException(status_code=400, detail="Either jd_file or jd_text must be provided.")
+    selected_role = normalize_selected_role(target_position)
+    if not selected_role:
+        raise HTTPException(status_code=400, detail="Select Assistant Professor, Associate Professor, or Professor.")
 
     if not resume_files or len(resume_files) == 0:
         raise HTTPException(status_code=400, detail="At least one resume file must be uploaded.")
 
-    # 1. Parse JD
-    parsed_jd_text = ""
-    if jd_file:
-        jd_content = await jd_file.read()
-        validate_file_upload(jd_file.filename, jd_content)
-        temp_jd_path = os.path.join(settings.UPLOAD_DIR, f"temp_jd_{uuid.uuid4().hex}_{jd_file.filename}")
-        with open(temp_jd_path, "wb") as f:
-            f.write(jd_content)
-        parsed_jd_text = extract_text_robust(temp_jd_path)
-        try:
-            os.remove(temp_jd_path)
-        except:
-            pass
-    else:
-        parsed_jd_text = (jd_text or "").strip()
-
-    if not parsed_jd_text:
-        raise HTTPException(status_code=400, detail="Failed to extract text from provided Job Description.")
-
-    jd_data = extract_jd_with_llm(parsed_jd_text)
-    if not jd_data:
-        raise HTTPException(status_code=500, detail="Failed to parse Job Description structure via LLM.")
+    jd_data = get_permanent_jd_data(selected_role)
 
     # 2. Save candidate files to storage and validate
     saved_file_info = []
@@ -130,7 +109,7 @@ async def match_bulk_resumes(
     # 3. Create Job in DB
     new_job = MatchJob(
         id=job_id,
-        title=f"Bulk Screening for {jd_data.get('job_title', 'Faculty Post')}",
+        title=f"Bulk Screening for {selected_role}",
         total_resumes=len(saved_file_info),
         processed_resumes=0,
         status="QUEUED"
@@ -163,6 +142,14 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
 
     results_entries = db.query(MatchResult).filter(MatchResult.job_id == job_id).all()
     results_list = [r.full_result_json for r in results_entries]
+    report_excel_url = None
+    if job.report_csv_path:
+        if job.report_pdf_path:
+            pdf_name = os.path.basename(job.report_pdf_path)
+            excel_name = pdf_name.replace("_match_report_pdf_", "_match_report_excel_").removesuffix(".pdf") + ".xlsx"
+        else:
+            excel_name = dated_report_filename("excel", "xlsx", job.id[:8], job.created_at)
+        report_excel_url = f"/static/{excel_name}"
 
     return {
         "job_id": job.id,
@@ -172,11 +159,7 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
         "processed_resumes": job.processed_resumes,
         "report_pdf_url": job.report_pdf_path,
         "report_csv_url": job.report_csv_path,
-        "report_excel_url": (
-            f"/static/faculty_report_{job.id[:8]}.xlsx"
-            if job.report_csv_path
-            else None
-        ),
+        "report_excel_url": report_excel_url,
         "results": results_list,
         "error_message": job.error_message
     }

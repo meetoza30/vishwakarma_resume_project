@@ -194,9 +194,20 @@
 
 .faculty-summary-table {
   width: 100%;
+  min-width: 2500px;
   border-collapse: collapse;
   font-size: 13px;
   text-align: left;
+}
+
+.faculty-summary-table td {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.faculty-summary-table .report-breakdown-cell {
+  min-width: 240px;
+  font-size: 12px;
 }
 
 .faculty-summary-table th {

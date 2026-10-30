@@ -7,6 +7,74 @@ from services.aicte_engine import (evaluate_aicte_eligibility, normalize_positio
 load_dotenv()
 
 
+PERMANENT_ROLE_CRITERIA = {
+    "Assistant Professor": {
+        "position": "Assistant Professor",
+        "job_title": "Assistant Professor",
+        "qualification_norm": (
+            "B.E./B.Tech./B.S. and M.E./M.Tech./M.S. or Integrated M.Tech. in relevant "
+            "branch with First Class or equivalent in any one of the degrees."
+        ),
+        "experience_norm": "No minimum experience requirement.",
+        "publications_norm": "Desirable / Research aptitude.",
+        "education_required": "B.E./B.Tech./B.S. and M.E./M.Tech./M.S. or Integrated M.Tech. with First Class",
+        "experience_required_years": 0,
+        "min_publications": 0,
+    },
+    "Associate Professor": {
+        "position": "Associate Professor",
+        "job_title": "Associate Professor",
+        "qualification_norm": (
+            "Ph.D. in relevant discipline with First Class or equivalent at "
+            "Bachelor's or Master’s level."
+        ),
+        "experience_norm": "Minimum 8 years of total experience, out of which at least 2 years must be Post-Ph.D.",
+        "publications_norm": "Minimum 6 research publications in SCI / UGC Care / AICTE-approved journals.",
+        "education_required": "Ph.D. in relevant discipline with First Class at Bachelor's or Master's level",
+        "experience_required_years": 8,
+        "min_publications": 6,
+    },
+    "Professor": {
+        "position": "Professor",
+        "job_title": "Professor",
+        "qualification_norm": (
+            "Ph.D. in relevant discipline with First Class or equivalent at "
+            "Bachelor's or Master’s level."
+        ),
+        "experience_norm": (
+            "Minimum 10 years of total experience, out of which at least 3 years must be "
+            "at the level of Associate Professor or equivalent."
+        ),
+        "publications_norm": (
+            "Minimum 10 research publications in SCI / UGC Care / AICTE-approved journals "
+            "OR minimum 6 research publications if successfully guided at least 2 Ph.D. candidates."
+        ),
+        "education_required": "Ph.D. in relevant discipline with First Class at Bachelor's or Master's level",
+        "experience_required_years": 10,
+        "min_publications": 10,
+    },
+}
+
+
+def get_permanent_jd_data(role: str = None) -> dict:
+    """Return permanent criteria dictionary for the specified faculty role."""
+    r_lower = str(role or '').lower()
+    if 'associate' in r_lower:
+        return dict(PERMANENT_ROLE_CRITERIA['Associate Professor'])
+    elif 'professor' in r_lower and 'assistant' not in r_lower:
+        return dict(PERMANENT_ROLE_CRITERIA['Professor'])
+    return dict(PERMANENT_ROLE_CRITERIA['Assistant Professor'])
+
+
+def normalize_selected_role(role: str) -> str | None:
+    """Return the canonical role only when one of the supported roles was selected."""
+    normalized = _normalize(role)
+    for supported in PERMANENT_ROLE_CRITERIA:
+        if _normalize(supported) == normalized:
+            return supported
+    return None
+
+
 def _normalize(text) -> str:
     """Lowercase, strip punctuation for normalized comparison."""
     if not isinstance(text, str):
@@ -375,7 +443,12 @@ Respond ONLY with JSON: {{"summary": "<text>"}}
             f"Norm check: {norm_line}.")
 
 
-def match_resume_to_jd(resume: dict, jd: dict) -> dict:
+def match_resume_to_jd(resume: dict, jd: dict = None, target_role: str = None) -> dict:
+    if jd is None or not isinstance(jd, dict):
+        jd = get_permanent_jd_data(target_role)
+    elif target_role:
+        permanent = get_permanent_jd_data(target_role)
+        jd = {**permanent, **jd}
     """
     Norm-focused seven-pillar matching engine.
     1. Evaluates AICTE Faculty Eligibility Norms via deterministic rule engine.
@@ -520,7 +593,7 @@ def match_resume_to_jd(resume: dict, jd: dict) -> dict:
         "candidate_name": resume.get("candidate_name") or resume.get("Name", "Unknown"),
         "job_title": jd.get("job_title", ""),
         "weights_used": weights,
-        # "applied_post": resume.get("applied_post") or jd.get("job_title", "Faculty"),
+        "applied_post": aicte_result.get("target_position") or jd.get("position") or jd.get("job_title", "Faculty"),
         "contact_number": resume.get("contact_number", "Not Mentioned"),
         "email_id": resume.get("email_id", "Not Mentioned"),
         "qualification": resume.get("qualification", {}),

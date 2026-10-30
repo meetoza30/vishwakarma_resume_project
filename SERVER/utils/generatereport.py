@@ -14,8 +14,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
-from datetime import datetime
-from services.report_export import sort_results_by_score
+from services.report_export import report_now, sort_results_by_score, aicte_eligible_role
 
 # ---------------------------------------------------------------------------
 # Brand constants (Vishwakarma Group Theme)
@@ -144,7 +143,7 @@ def _later_pages(canvas, doc):
     # Label top-right
     canvas.setFillColor(BRAND_BLUE)
     canvas.setFont("Helvetica-Bold", 9)
-    canvas.drawRightString(190 * mm, height - 10 * mm, "Vishwakarma Group — Faculty Resume Screening Report")
+    canvas.drawRightString(190 * mm, height - 10 * mm, "Vishwakarma Group - Faculty Resume Screening Report")
 
     # Page number
     canvas.setFillColor(colors.HexColor("#888888"))
@@ -158,51 +157,21 @@ def _later_pages(canvas, doc):
 # Report sections
 # ---------------------------------------------------------------------------
 
-def _cover_section(jd_data: dict, total_candidates: int) -> list:
-    """Top-of-report header block summarising the JD."""
+def _cover_section(jd_data: dict) -> list:
+    """Report title, selected faculty role, and generation timestamp."""
     elements = []
 
     elements.append(Spacer(1, 4 * mm))
-    elements.append(Paragraph("Resume Match Report", report_title_style))
+    elements.append(Paragraph("Match Report", report_title_style))
     elements.append(Paragraph(
-        f"Generated on {datetime.now().strftime('%d %B %Y, %I:%M %p')}",
+        f"Role: {jd_data.get('position') or 'Not Mentioned'}",
+        body_style,
+    ))
+    elements.append(Paragraph(
+        f"Generated on {report_now().strftime('%d %B %Y, %I:%M %p')}",
         small_gray,
     ))
     elements.append(Spacer(1, 4 * mm))
-
-    # JD summary box — light-blue background table
-    jd_title    = jd_data.get("job_title", "N/A")
-    company     = jd_data.get("company", "")
-    domain      = jd_data.get("key_domain", "")
-    exp_req     = jd_data.get("experience_required_years", 0)
-    edu_req     = jd_data.get("education_required", "N/A")
-    req_skills  = ", ".join(jd_data.get("required_skills", [])[:8]) or "—"
-    eligibility_role = jd_data.get("position") or "Not Mentioned"
-
-    jd_rows = [
-        [Paragraph("AICTE Eligibility Role", label_style), Paragraph(eligibility_role, body_style)],
-        [Paragraph("Job Title", label_style),         Paragraph(jd_title, body_style)],
-        [Paragraph("Company", label_style),            Paragraph(company or "—", body_style)],
-        [Paragraph("Domain", label_style),             Paragraph(domain or "—", body_style)],
-        [Paragraph("Experience Required", label_style),Paragraph(f"{exp_req}+ years", body_style)],
-        [Paragraph("Education", label_style),          Paragraph(edu_req, body_style)],
-        [Paragraph("Required Skills", label_style),    Paragraph(req_skills, body_style)],
-        [Paragraph("Candidates Evaluated", label_style), Paragraph(str(total_candidates), body_style)],
-    ]
-
-    jd_table = Table(jd_rows, colWidths=[55 * mm, 115 * mm])
-    jd_table.setStyle(TableStyle([
-        ("BACKGROUND",  (0, 0), (-1, -1), BRAND_LIGHT),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [BRAND_LIGHT, colors.white]),
-        ("GRID",        (0, 0), (-1, -1), 0.4, colors.HexColor("#CFE2F3")),
-        ("VALIGN",      (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING",  (0, 0), (-1, -1), 8),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING",   (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING",(0, 0), (-1, -1), 5),
-    ]))
-
-    elements.append(jd_table)
     elements.append(Spacer(1, 6 * mm))
     elements.append(HRFlowable(width="100%", thickness=1, color=BRAND_BLUE, spaceAfter=6))
     return elements
@@ -225,12 +194,7 @@ def _candidate_section(rank: int, result: dict) -> list:
     grade           = match.get("grade", "N/A")
     summary         = match.get("summary", "")
     breakdown       = match.get("breakdown", {})
-    aicte_eligibility = match.get("aicte_eligibility", {})
-    eligibility_role = (
-        aicte_eligibility.get("primary_recommended_status", "Not Mentioned")
-        if isinstance(aicte_eligibility, dict)
-        else "Not Mentioned"
-    )
+    eligible_role = aicte_eligible_role(match)
     candidate_name  = match.get("candidate_name") or result.get("filename", f"Candidate {rank}")
     filename        = result.get("filename", "")
 
@@ -266,7 +230,7 @@ def _candidate_section(rank: int, result: dict) -> list:
         ParagraphStyle("score_line", fontSize=10, leading=14, spaceAfter=4),
     )
     eligibility_para = Paragraph(
-        f'<font color="#0B6FA4"><b>AICTE Eligibility Role:</b></font> {eligibility_role}',
+        f'<font color="#0B6FA4"><b>AICTE Eligibility:</b></font> {eligible_role}',
         ParagraphStyle("aicte_role", fontSize=10, leading=14, spaceAfter=4),
     )
 
@@ -317,8 +281,7 @@ def _candidate_section(rank: int, result: dict) -> list:
         _metric_row("3. Patents & Grants",        "patents_grants"),
         _metric_row("4. Leadership Roles",        "leadership_roles"),
         _metric_row("5. Professional Dev",        "professional_dev"),
-        _metric_row("6. Technical Skills",        "technical_skills"),
-        _metric_row("7. Education",               "education"),
+        _metric_row("6. Education",               "education"),
     ]
 
     col_widths = [45 * mm, 18 * mm, 22 * mm, 85 * mm]
@@ -376,7 +339,7 @@ def generate_match_report_pdf(
     Args:
         results:     List of per-candidate result dicts from /match-bulk.
                      Each dict must have keys: filename, success, match.
-        jd_data:     Extracted JD dict from extract_jd_with_llm.
+        jd_data:     Stored criteria for the selected faculty position.
         output_path: Full filesystem path for the output PDF.
     """
     doc = SimpleDocTemplate(
@@ -392,7 +355,7 @@ def generate_match_report_pdf(
 
     # Cover / JD summary
     successful = sort_results_by_score([r for r in results if r.get("success")])
-    story.extend(_cover_section(jd_data, len(successful)))
+    story.extend(_cover_section(jd_data))
 
     # One block per successful candidate
     for rank, result in enumerate(successful, start=1):
